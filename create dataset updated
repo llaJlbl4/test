@@ -1,0 +1,152 @@
+import geopandas as gpd
+import pandas as pd
+import requests
+import overpy
+from geopy.geocoders import Nominatim
+from shapely.geometry import Point
+from datetime import datetime, timezone, timedelta
+from collections import defaultdict
+from math import radians, sin, cos, sqrt, atan2
+
+# Инициализация
+geolocator = Nominatim(user_agent="gpx-analyzer")
+overpass = overpy.Overpass()
+weather_cache = defaultdict(dict)
+
+def fetch_gpx_points(url, track_num):
+    gpx_file = f"track_{track_num}.gpx"
+    with open(gpx_file, "wb") as f:
+        f.write(requests.get(url).content)
+    return gpd.read_file(gpx_file, layer="track_points")
+
+def get_region(point):
+    try:
+        loc = geolocator.reverse((point.y, point.x), timeout=10)
+        return loc.raw.get("address", {}).get("state", "Неизвестно")
+    except:
+        return "Неизвестно"
+
+def get_location_type(lat, lon):
+    try:
+        address = geolocator.reverse((lat, lon), timeout=10).raw.get('address', {})
+        if 'suburb' in address: return "Пригород"
+        if 'city' in address or 'town' in address: return "Город"
+        if 'village' in address or 'hamlet' in address: return "Сельская местность"
+        return "Природная зона"
+    except:
+        return "Неизвестно"
+
+def get_surroundings(lat, lon, radius=500):
+    try:
+        result = overpass.query(f"""
+            (
+                node(around:{radius},{lat},{lon});
+                way(around:{radius},{lat},{lon});
+                relation(around:{radius},{lat},{lon});
+            );
+            out tags;
+        """)
+        tags = {
+            tag + ":" + elem.tags[tag]
+            for elem in result.nodes + result.ways + result.relations
+            for tag in ["natural", "landuse", "amenity", "leisure", "building"]
+            if tag in elem.tags
+        }
+        return ", ".join(sorted(tags)) if tags else "ничего интересного"
+    except:
+        return "неизвестно"
+
+def estimate_step_frequency(gdf):
+    if "time" not in gdf.columns: return None
+    gdf["time"] = pd.to_datetime(gdf["time"], errors="coerce")
+    if gdf["time"].isnull().all(): return None
+    return round(gdf.groupby(gdf["time"].dt.floor("min")).size().mean(), 2)
+
+def get_temperature(lat, lon, time_point):
+    if pd.isnull(time_point): return "—"
+    dt = time_point.replace(minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+    hour_key = dt.isoformat()
+    coord_key = (round(lat, 3), round(lon, 3))
+
+    if hour_key in weather_cache[coord_key]:
+        return weather_cache[coord_key][hour_key]
+
+    try:
+        url = (
+            f"https://archive-api.open-meteo.com/v1/era5?"
+            f"latitude={lat}&longitude={lon}"
+            f"&start_date={dt.date()}&end_date={dt.date()}"
+            f"&hourly=temperature_2m&timezone=UTC"
+        )
+        data = requests.get(url).json()
+        if "hourly" not in data: return "неизвестно"
+        times = pd.to_datetime(data["hourly"]["time"]).tz_localize("UTC")
+        temps = data["hourly"]["temperature_2m"]
+        temp = temps[(abs(times - dt)).argmin()]
+        weather_cache[coord_key][hour_key] = temp
+        return temp
+    except:
+        return "неизвестно"
+
+def haversine(p1, p2):
+    R = 6371000
+    lat1, lon1, lat2, lon2 = map(radians, [p1.y, p1.x, p2.y, p2.x])
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    a = sin(dlat/2)**2 + cos(lat1)*cos(lat2)*sin(dlon/2)**2
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
+
+def process_track(url, track_num):
+    print(f"➡️ Трек {track_num}")
+    gdf = fetch_gpx_points(url, track_num)
+    if gdf.empty:
+        print("⚠️ Пустой трек")
+        return pd.DataFrame()
+
+    gdf["time"] = pd.to_datetime(gdf["time"], errors="coerce")
+    gdf = gdf.to_crs(epsg=4326)
+    step_freq = estimate_step_frequency(gdf)
+    region = get_region(gdf.geometry.iloc[0])
+
+    records = []
+    last_env_point = None
+    env_type, env_desc = "Неизвестно", "неизвестно"
+
+    for _, row in gdf.iterrows():
+        pt = row.geometry
+        lat, lon = pt.y, pt.x
+        time_point = row.get("time")
+        date = time_point.date() if pd.notnull(time_point) else "—"
+        ele = row.get("ele")
+
+        if last_env_point is None or haversine(pt, last_env_point) >= 500:
+            env_type = get_location_type(lat, lon)
+            env_desc = get_surroundings(lat, lon)
+            last_env_point = pt
+
+        temp = get_temperature(lat, lon, time_point)
+
+        records.append({
+            "Трек": track_num,
+            "Дата": date,
+            "Регион": region,
+            "Координаты": (lat, lon),
+            "Частота шагов": step_freq,
+            "Высота": ele,
+            "Температура": temp,
+            "Местность": env_type,
+            "Объекты вокруг": env_desc
+        })
+
+    return pd.DataFrame(records)
+
+if __name__ == "__main__":
+    urls = [
+        "https://www.openstreetmap.org/traces/11951791/data",
+        "https://www.openstreetmap.org/traces/11951772/data",
+        "https://www.openstreetmap.org/traces/11952070/data"
+    ]
+
+    all_tracks = [process_track(url, i+1) for i, url in enumerate(urls)]
+    result = pd.concat(all_tracks, ignore_index=True)
+    result.to_csv("track_data.csv", index=False)
+    print("✅ Сохранено в 'track_data.csv'")
