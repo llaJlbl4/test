@@ -1,0 +1,50 @@
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import contextily as ctx
+import requests
+
+def load_and_plot_with_topo_safe(url, zoom=15):
+    # Загрузка GPX
+    response = requests.get(url)
+    with open("temp.gpx", "wb") as f:
+        f.write(response.content)
+
+    gdf = gpd.read_file("temp.gpx", layer='tracks')
+
+    # Перевод в проекцию Web Mercator (для contextily)
+    gdf = gdf.to_crs(epsg=3857)
+
+    # Построение карты
+    fig, ax = plt.subplots(figsize=(10, 10))
+    gdf.plot(ax=ax, color='red', linewidth=2)
+
+    try:
+        ctx.add_basemap(
+            ax,
+            crs=gdf.crs,
+            source=ctx.providers.OpenTopoMap,
+            zoom=zoom
+        )
+    except Exception as e:
+        print("Не удалось подгрузить подложку OpenTopoMap:", str(e))
+        # Можно использовать запасной вариант
+        ctx.add_basemap(ax, crs=gdf.crs, source=ctx.providers.Stamen.Terrain)
+
+    ax.set_title("Трек на топографической карте (с рельефом)")
+    ax.axis("off")
+
+    # Сохранение
+    output_path = f"topo_overlay_{url.split('/')[-2].replace('.gpx','')}.png"
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+    print(f"Сохранено: {output_path}")
+
+    return gdf
+
+# Замените ссылку на реальный трек
+track_urls = ["https://www.openstreetmap.org/traces/11952100/data", 'https://www.openstreetmap.org/traces/11952070/data',"https://www.openstreetmap.org/traces/11951700/data"]
+tracks = []
+
+for url in track_urls:
+    gdf = load_and_plot_with_topo_safe(url)
+    tracks.append(gdf)
