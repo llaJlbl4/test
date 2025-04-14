@@ -96,10 +96,10 @@ def haversine(p1, p2):
     return R * 2 * atan2(sqrt(a), sqrt(1 - a))
 
 def process_track(url, track_num):
-    print(f"➡️ Трек {track_num}")
+    print(f"Трек {track_num}")
     gdf = fetch_gpx_points(url, track_num)
     if gdf.empty:
-        print("⚠️ Пустой трек")
+        print("Пустой трек")
         return pd.DataFrame()
 
     gdf["time"] = pd.to_datetime(gdf["time"], errors="coerce")
@@ -149,4 +149,4 @@ if __name__ == "__main__":
     all_tracks = [process_track(url, i+1) for i, url in enumerate(urls)]
     result = pd.concat(all_tracks, ignore_index=True)
     result.to_csv("track_data.csv", index=False)
-    print("✅ Сохранено в 'track_data.csv'")
+    print("Сохранено в 'track_data.csv'")
