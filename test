@@ -1,1 +1,1 @@
-pip install psycopg2-binary Flask fastapi SQLAlchemy psycopg2
+pip install psycopg2-binary Flask fastapi SQLAlchemy Flask-SQLAlchemy Flask-Login Flask-Migrate Flask-WTF Flask-RESTFul Flask-Uploads Flask-Debugtoolbar Flask-Admin Flask-Cors djangorestframework django-cors-headers pillow django-filter mysqlclient Django-rest-framework-jwt Easy-thumbnails
